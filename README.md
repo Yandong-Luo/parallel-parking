@@ -16,4 +16,11 @@ roslaunch gem_launch gem_highbay.launch
 ```
 rosrun pointpillars_ros pointpillars_node.py
 ```
-
+重新规划路径，用这个
+```
+rosrun hybrid_astar replanning
+```
+当当前规划的路径看起来不错，执行以下指令完成对path的选择，然后车辆根据pid进行运动
+```
+rosrun hybrid_astar selectpath
+```
