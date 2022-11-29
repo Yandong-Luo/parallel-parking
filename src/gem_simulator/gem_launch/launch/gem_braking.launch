@@ -1,0 +1,65 @@
+<?xml version="1.0"?>
+
+<launch>
+    <arg name="paused" default="true"/>
+    <arg name="use_sim_time" default="true"/>
+    <arg name="gui" default="true"/>
+    <arg name="headless" default="false"/>
+    <arg name="debug" default="false"/>
+    <arg name="world_name" default="highbay_braking.world"/>
+
+    <include file="$(find gazebo_ros)/launch/empty_world.launch">
+        <arg name="debug" value="$(arg debug)" />
+        <arg name="gui" value="$(arg gui)" />
+        <arg name="paused" value="$(arg paused)"/>
+        <arg name="use_sim_time" value="$(arg use_sim_time)"/>
+        <arg name="headless" value="$(arg headless)"/>
+        <arg name="verbose" value="false"/>
+        <arg name="world_name" value="$(find gem_gazebo)/worlds/$(arg world_name)"/>
+    </include>
+
+    <!-- Spawn the GEM CAR -->
+    <include file="$(find gem_gazebo)/launch/gem_vehicle.launch">
+        <!-- <arg name="namespace" value="/gem"/> -->
+        <arg name="x" value="0.0"/>
+        <arg name="y" value="0.0"/>
+        <arg name="z" value="1.0"/>
+    </include>
+
+    <!-- 传入darknet的话题 -->
+    <!-- 仿真的 -->
+    <arg name="darknet_image_input" default="/front_single_camera/image_raw" />
+    <!-- 实物的 -->
+    <!-- <arg name="darknet_image_input" default="/zed2/zed_node/rgb/image_rect_color" /> -->
+    
+    <!-- 传入RGB和depth的结合的话题 -->
+
+    <!-- 真实gem的topic -->
+    <!-- <arg name="cam_info_topic"      default="/zed2/zed_node/rgb_raw/camera_info"/>
+    <arg name="rgb_img_topic"       default="/zed2/zed_node/rgb/image_rect_color"/>
+    <arg name="depth_info_topic"    default="/zed2/zed_node/depth/depth_registered"/> -->
+
+    <!-- 仿真的gem的topic -->
+    <arg name="cam_info_topic"      default="/front_single_camera/camera_info"/>
+    <arg name="rgb_img_topic"       default="/front_single_camera/image_raw"/>
+    <arg name="depth_info_topic"    default="/zed2/zed_node/depth/depth_registered"/>
+    <arg name="darknet_result_topic" default="/darknet_ros/bounding_boxes"/>
+
+    <param name = "cam_info_topic" type = "string" value = "$(arg cam_info_topic)" />
+    <param name = "rgb_img_topic" type = "string" value = "$(arg rgb_img_topic)" />
+    <param name = "depth_info_topic" type = "string" value = "$(arg depth_info_topic)" />
+    <param name = "darknet_result_topic" type = "string" value = "$(arg darknet_result_topic)" />
+    <!-- <node pkg="rgb_depth" type="rgb_depth_calculator.py" name="rgb_depth_calculator" output="screen">
+    </node> -->
+
+    <include file="$(find darknet_ros)/launch/yolo_v4_rds.launch">
+        <arg name="image" value="$(arg darknet_image_input)" />
+    </include>
+
+    <!-- RViz -->
+    <arg name="rviz" default="true"/>
+    <node if="$(arg rviz)" pkg="rviz" type="rviz" name="$(anon rviz)" respawn="false" output="screen" args="-d $(find gem_launch)/config_rviz/gem_braking.rviz" />
+
+    <!-- <node pkg="mp0" name="visualization_data" type="visualization_data.py" output="screen"/> -->
+
+</launch>

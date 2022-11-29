@@ -1,0 +1,28 @@
+<launch>
+    <!-- Arguments -->
+    <arg name="configuration_basename" default="gem_slam_2d_gazebo.lua"/>
+    <arg name="remap_map_topic" default="false"/>
+    <arg name="remap_map_topic_name" default="/cmap" />
+
+    <node pkg="cartographer_ros" 
+        type="cartographer_node" name="cartographer_node" 
+        args="-configuration_directory $(find gem_gazebo)/config/slam_config -configuration_basename $(arg configuration_basename)"
+        output="log">
+        <remap from="/points2" to="/velodyne_points"/>
+    </node>
+
+
+    <!-- cartographer_occupancy_grid_node -->
+    <group  if="$(arg remap_map_topic)">
+        <node pkg="cartographer_ros" type="cartographer_occupancy_grid_node" 
+              name="cartographer_occupancy_grid_node" args="-resolution 0.05">
+        <remap from="/map" to="$(arg remap_map_topic_name)" />
+        </node>
+    </group>
+
+    <group  unless="$(arg remap_map_topic)">
+        <node pkg="cartographer_ros" type="cartographer_occupancy_grid_node" 
+              name="cartographer_occupancy_grid_node" args="-resolution 0.05">
+        </node>
+    </group>
+</launch>

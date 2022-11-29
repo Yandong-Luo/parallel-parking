@@ -1,0 +1,17 @@
+<?xml version="1.0"?>
+
+<launch>
+    <!--Visualize the objects detected by PointPillar-->
+    <node pkg="detected_objects_visualizer" type="visualize_detected_objects" name="point_pillars_visualization_01"
+        output="screen"  ns="/detection/lidar_detector"/>
+
+    <!-- 为了配合代码里的坐标变换加入的坐标关系，真实用的时候删掉 -->
+    <node pkg="tf" type="static_transform_publisher" name="map_to_path_transformation" args="0 0 0 0 0 0 1 base_footprint front_single_camera_link 100" />
+    
+    <node pkg="rgb_depth" type="rgb_depth_calculator.py" name="rgb_depth_calculator" output="screen"/>
+
+    <include file="$(find darknet_ros)/launch/yolo_v4_rds.launch"/>
+
+    <!-- RViz -->
+    <node name="rviz" pkg="rviz" type="rviz" args="-d $(find gem_launch)/config_rviz/gem_rosbag.rviz" />
+</launch>
