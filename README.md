@@ -12,4 +12,8 @@ https://github.com/zhulf0804/PointPillars
 ```
 roslaunch gem_launch gem_highbay.launch
 ```
+启动了这个之后再在另一个的终端中启动pointpillar来进行pointcloud的感知
+```
+rosrun pointpillars_ros pointpillars_node.py
+```
 
