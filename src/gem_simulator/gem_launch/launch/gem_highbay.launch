@@ -92,7 +92,7 @@
 
   <node pkg="tf" type="static_transform_publisher" name="map_to_path_transformation" args="0 0 0 0 0 0 1 map path 100" />
   
-  <!-- 用于planning的搜索空间 -->
+  <!-- 用于生成planning的搜索空间 -->
   <node pkg="manual_map_builder" type="mapbuilder_node.py" name="planning_space" output="screen"/>
   
   <!-- hybrid planning规划路径 -->

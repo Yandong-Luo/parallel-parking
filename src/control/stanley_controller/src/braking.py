@@ -22,7 +22,7 @@ import rospy
 from ackermann_msgs.msg import AckermannDrive
 from std_msgs.msg import Header
 from pacmod_msgs.msg import PacmodCmd, PositionWithSpeed, VehicleSpeedRpt
-from darknet_ros_msgs.msg import BoundingBoxes
+# from darknet_ros_msgs.msg import BoundingBoxes
 from rgb_depth.msg import detector_info
 
 vehicle_width = 1.41
@@ -93,7 +93,7 @@ class PID():
 class Brake():
     def __init__(self) -> None:
         # 订阅的话题
-        self.rate = rospy.Rate(30)
+        self.rate = rospy.Rate(1)
 
         # 获取话题名字
         # darknet_result_topic = rospy.get_param('darknet_result_topic','/darknet_ros/bounding_boxes')
@@ -117,47 +117,66 @@ class Brake():
         self.ackermann_msg.speed                   = 0.0
         self.ackermann_msg.steering_angle          = 0.0
 
-        self.safe_distance = 10.0
+        self.safe_distance = 6.0   # m
+        self.slow_distance = 15.0   # m
         self.desired_speed = 0.6  # m/s
         self.max_accel     = 0.48 # % of acceleration
         self.pid_speed     = PID(0.5, 0.0, 0.1, wg=20)
         self.speed_filter  = Onlinct_errorilter(1.2, 30, 4)
 
+        self.person_x = np.inf
+        self.person_y = np.inf
+
         self.speed      = 0.0
 
+        # GEM vehilce brake control
+        self.brake_pub = rospy.Publisher('/pacmod/as_rx/brake_cmd', PacmodCmd, queue_size=1)
+        self.brake_cmd = PacmodCmd()
+        self.brake_cmd.enable = False
+        self.brake_cmd.clear  = True
+        self.brake_cmd.ignore = True
+
     def objects_info_callback(self, objects_msg):
-        print("收到消息")
-        print("class:",objects_msg.objects[0].type,"point x:",objects_msg.objects[0].objection_point.point.x, "point y:",objects_msg.objects[0].objection_point.point.y,\
-            "point z:",objects_msg.objects[0].objection_point.point.z,"dist:",objects_msg.objects[0].distance)
+        print("class:",objects_msg.objects[0].type,"point x:",objects_msg.objects[0].point.point.x, "point y:",objects_msg.objects[0].point.point.y,\
+            "point z:",objects_msg.objects[0].point.point.z,"dist:",objects_msg.objects[0].distance)
 
         # 迭代计算出现的人是否会与车辆运行的轨迹相碰撞
         for object in objects_msg.objects:
-            cur_x = object.point.x
-            cur_y = object.point.y
+            self.person_x = object.point.point.x
+            self.person_y = object.point.point.y
 
-            # 十米开始刹车, 增大车辆的宽度0.3m使更安全
-            if abs(cur_y) < vehicle_width/2 + 0.3 and cur_x < self.safe_distance:
+            # 五米开始刹停, 增大车辆的宽度0.3m使更安全
+            # abs(self.person_y) < vehicle_width/2 + 1.5 and
+            if abs(self.person_x) - vehicle_length/2 < self.safe_distance:
                 # 刹车
                 # 直接刹死
-
+                print("Stop it")
                 # ackermann_msg 去强制刹车
-                self.ackermann_msg.steering_angle_velocity = 0.0
-                self.ackermann_msg.acceleration            = 0.0
-                self.ackermann_msg.jerk                    = 0.0
-                self.ackermann_msg.speed                   = 0.0
-                self.ackermann_msg.steering_angle          = 0.0
-                self.cmd_pub.publish(self.ackermann_msg)
+                # self.ackermann_msg.steering_angle_velocity = 0.0
+                # self.ackermann_msg.acceleration            = 0.0
+                # self.ackermann_msg.jerk                    = 0.0
+                # self.ackermann_msg.speed                   = 0.0
+                # self.ackermann_msg.steering_angle          = 0.0
+                # self.cmd_pub.publish(self.ackermann_msg)
+
+                # pacmod刹车
+                self.brake_cmd.enable  = True
+                self.brake_cmd.clear   = False
+                self.brake_cmd.ignore  = False
+                self.brake_cmd.f64_cmd = 0.0
+                self.brake_pub.publish(self.brake_cmd)
 
                 # 用PID去刹车
-                self.pid_control(0)
-
-                # 用pacmod去刹车
-                # GEM vehilce brake control
-                # self.brake_pub = rospy.Publisher('/pacmod/as_rx/brake_cmd', PacmodCmd, queue_size=1)
-                # self.brake_cmd = PacmodCmd()
-                # self.brake_cmd.enable = True
-                # self.brake_cmd.clear  = False
-                # self.brake_cmd.ignore = False
+                # self.pid_control(0)
+            elif self.person_x < self.slow_distance:
+                print("SLOW DOWN")
+                self.pid_control(0.6)
+            else:
+                self.person_x = np.inf
+                self.person_y = np.inf
+                print("Desired Speed")
+                # 以期望速度运行
+                self.pid_control(self.desired_speed)
     
     # Get vehicle speed
     def speed_callback(self, msg):
@@ -183,13 +202,20 @@ class Brake():
 
     def run(self):
         while not rospy.is_shutdown():
+            # self.person_x = np.inf
+            # self.person_y = np.inf
             self.rate.sleep()
+
+            if self.person_x is np.inf or self.person_y is np.inf:
+                print("Desired Speed")
+                self.pid_control(self.desired_speed)
+            
 
 if __name__ == '__main__':
     rospy.init_node('braking_node', anonymous=True)
     node = Brake()
     try:
-        # node.run()
-        rospy.spin()
+        node.run()
+        # rospy.spin()
     except KeyboardInterrupt:
         print("Shutting down")

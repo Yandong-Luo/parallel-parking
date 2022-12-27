@@ -14,7 +14,7 @@ import message_filters
 import math
 import tf
 # from darknet_ros_msgs.msg import BoundingBoxes
-from hog_haar_person_detection.msg import Pedestrians,BoundingBox
+from hog_haar_person_detection.msg import Objections,BoundingBox
 from sensor_msgs.msg import Image, CameraInfo
 from cv_bridge import CvBridge, CvBridgeError
 from geometry_msgs.msg import PointStamped
@@ -23,18 +23,31 @@ from rgb_depth.msg import detector_info, object_info
 class RGB_Depth:
     def __init__(self) -> None:
         
+        self.detect_type = rospy.get_param("~detect_type","stop sign")
+
+        if self.detect_type == "person":
+            # 默认检查人
+            detect_result_topic = rospy.get_param('detect_result_topic','/haar/pedestrians')
+            print("detecting person")
+        elif self.detect_type == 'stop sign':
+            detect_result_topic = rospy.get_param('detect_result_topic','/haar/stop_sign')
+            print("detecting stop sign")
+        else:
+            print("make sure you have selected a type of object to detect")
+
         cam_info_topic = rospy.get_param('cam_info_topic','/zed2/zed_node/rgb_raw/camera_info')
         rgb_img_topic = rospy.get_param('rgb_img_topic','/zed2/zed_node/rgb/image_rect_color')
         depth_img_topic = rospy.get_param('depth_info_topic','/zed2/zed_node/depth/depth_registered')
+
+        # 弃用darknet
         # darknet_result_topic = rospy.get_param('darknet_result_topic','/darknet_ros/bounding_boxes')
-        detect_result_topic = rospy.get_param('detect_result_topic','/person_detection/pedestrians')
 
         # 相机矩阵的信息
         self.camera_info_sub = message_filters.Subscriber(cam_info_topic, CameraInfo)
         # yolo的检测结果,放弃yolo
         # self.result_sub = message_filters.Subscriber(darknet_result_topic,BoundingBoxes)
 
-        self.result_sub = message_filters.Subscriber(detect_result_topic,Pedestrians)
+        self.result_sub = message_filters.Subscriber(detect_result_topic,Objections)
 
         # RGB图像,暂时用了kitti的数据集
         self.rgb_img_sub = message_filters.Subscriber(rgb_img_topic,Image)
@@ -45,7 +58,7 @@ class RGB_Depth:
         self.detector_info_pub = rospy.Publisher('/detector_info',detector_info,queue_size=1)
 
         # 合并RGB和深度的信息的图像发布
-        self.detected_pub = rospy.Publisher('/rgb_depth/detected_image', Image, queue_size=1)
+        # self.detected_pub = rospy.Publisher('/rgb_depth/detected_image', Image, queue_size=1)
         # 检测且带距离的RGB图像
         self.detected_rgb_pub = rospy.Publisher('/rgb_depth/detected_rgb_image',Image,queue_size=1)
         # 检测后且带有距离的Depth深度图像发布
@@ -89,10 +102,14 @@ class RGB_Depth:
                    0.7, (200,255,0), 1, cv2.LINE_AA)
             cv2.putText(cv_rgb, "y axis", (int(rgb_width/2),int(rgb_height/2)+180), cv2.FONT_HERSHEY_SIMPLEX,  
                    0.7, (125,255,0), 1, cv2.LINE_AA)
+            
+            # 用于发布检测到物体的位置、距离、类型
+            objections = detector_info()
+            objections.objects = []
 
             # 遍历yolo的检测结果
-            for object in result.pedestrians:
-                print("有人")
+            for object in result.objections:
+                # print("有人")
                 # 只保留stop sign 和人的检测
                 # obj_width = object.width
                 # obj_height = object.height
@@ -142,6 +159,9 @@ class RGB_Depth:
                 point_x = ((x + w/2) - m_cx) * point_z * inv_fx
                 point_y = ((y + h/2) - m_cy) * point_z * inv_fy
 
+                if point_x is float("inf") or point_y is float("inf") or point_z is float("inf"):
+                    continue
+
                 # PointStamp
                 targetPoint = PointStamped()
                 targetPoint.point.x = point_x   
@@ -152,7 +172,10 @@ class RGB_Depth:
                 z_str = "Z: " + str(format(point_z, '.3f'))
 
                 # 类别信息
-                class_str = "class: pedestrians"
+                if self.detect_type == "person":
+                    class_str = "class: pedestrians"
+                else:
+                    class_str = "class: stop sign"
 
                 cv2.putText(cv_rgb, class_str, (x+w, y), cv2.FONT_HERSHEY_SIMPLEX,  
                 0.7, (0,0,255), 1, cv2.LINE_AA) 
@@ -170,6 +193,12 @@ class RGB_Depth:
 
                 cv2.putText(cv_rgb, dist_str, (x+w, y+80), cv2.FONT_HERSHEY_SIMPLEX,  
                 0.7, (0,255,0), 1, cv2.LINE_AA)
+
+                objection_info = self.transform_objection(point_x,point_y,point_z,dist,"person")
+                objections.objects.append(objection_info)
+                objections.header.stamp = rospy.Time(0)
+                # 发布
+                self.detector_info_pub.publish(objections)
 
         except CvBridgeError as e:
             print(e)
@@ -335,7 +364,7 @@ class RGB_Depth:
         object_point = self.transform_to_target_frame(init_pose=object_point,target_frame='base_footprint',inital_frame='front_single_camera_link')    # base_footprint可能不是gem的坐标系，要检查
 
         objection_info = object_info()
-        objection_info.objection_point = object_point
+        objection_info.point = object_point
         objection_info.type = type
         objection_info.distance.data = dist
 

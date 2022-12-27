@@ -36,14 +36,14 @@ class lanenet_detector():
         self.pub_bird = rospy.Publisher("lane_detection/birdseye", Image, queue_size=1)
 
         # 发布线的信息，包括曲率，左右车道线
-        self.pub_line = rospy.Publisher("/lane_info",lane_info,queue_size=1)
+        self.pub_line = rospy.Publisher("/lane_info",line_info,queue_size=1)
 
         self.left_line = Line(n=5)
         self.right_line = Line(n=5)
         self.detected = False
         self.hist = True
 
-        self.m_lane_info = lane_info()
+        # self.m_lane_info = line_info()
 
         # self.zed = sl.Camera()
         # self.point_cloud = sl.Mat()
@@ -143,6 +143,8 @@ class lanenet_detector():
 
         binaryImage = np.zeros_like(SobelOutput)
         binaryImage[(ColorOutput==1)&(SobelOutput==1)] = 1
+        # binaryImage = np.zeros_like(SobelOutput)
+        # binaryImage[(ColorOutput==1)|(SobelOutput==1)] = 1
         # Remove noise from binary image
         binaryImage = morphology.remove_small_objects(binaryImage,min_size=50,connectivity=2)
 
@@ -245,19 +247,12 @@ class lanenet_detector():
                 else:
                     self.detected = False
             
-            left_line_info = line_info()
-            left_line_info.type = "left"
-            left_line_info.fit = left_fit
-            # left_line_info.curvature = ret['left_curverad']
-            self.m_lane_info.lines.append(left_line_info)
+            m_line_info = line_info()
+            m_line_info.header.stamp = rospy.Time.now()
+            m_line_info.left_fit = left_fit
+            m_line_info.right_fit = right_fit
 
-            right_line_info = line_info()
-            right_line_info.type = "right"
-            right_line_info.fit = right_fit
-            # right_line_info.curvature = ret['right_curverad']
-            self.m_lane_info.lines.append(right_line_info)
-
-            self.pub_line.publish(self.m_lane_info)
+            self.pub_line.publish(m_line_info)
 
             # print('la:', left_fit[0], 'lb:', left_fit[1], 'lc:', left_fit[2])
             # print('ra:', right_fit[0], 'rb:', right_fit[1], 'rc:', right_fit[2])
@@ -266,9 +261,10 @@ class lanenet_detector():
             # print('la:', ret['left_fit'][0], 'lb:', ret['left_fit'][1], 'lc:', ret['left_fit'][2])
             # print('ra:', ret['right_fit'][0], 'rb:', ret['right_fit'][1], 'rc:', ret['right_fit'][2])
             state = 'Continue'
-            if np.abs(left_fit[1]) < 1 or np.abs(right_fit[1]) < 1:
+            print("当前左侧车道线斜率",left_fit[1],"当前右侧车道线斜率",right_fit[1])
+            if np.abs(left_fit[1]) < 9 or np.abs(right_fit[1]) < 9:
                 state = 'Go Ahead'
-            elif left_fit[1] >= 1 and right_fit[1] >= 1:
+            elif left_fit[1] >= 9 and right_fit[1] >= 9:
                 state = 'Turn Left'
             elif left_fit[1] <= -1 and right_fit[1] <= -1:
                 state = 'Turn Right'

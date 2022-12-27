@@ -20,12 +20,10 @@ import tf
 import tf2_ros
 from geometry_msgs.msg import PointStamped
 from std_msgs.msg import Bool
-from rgb_depth.msg import detector_info
 
 class map_Builder():
     def __init__(self) -> None:
-        # rospy.Subscriber("/detection/lidar_detector/objects", DetectedObjectArray, self.callback3)
-        rospy.Subscriber("/detector_info",detector_info, self.callback3)
+        rospy.Subscriber("/detection/lidar_detector/objects", DetectedObjectArray, self.callback3)
         rospy.Subscriber("/replanning",Bool,self.replan_callback)
         self.pub_map = rospy.Publisher('/map', OccupancyGrid, queue_size=1)
         self.pub_goal = rospy.Publisher('/goal_pose',PoseStamped,queue_size=1)
@@ -34,8 +32,193 @@ class map_Builder():
     
     def replan_callback(self, replan_msg):
         self.replan = replan_msg.data
+
+    # 检验识别后的数据是否有效
+    def IsObjectValid(self, object_data):
+        if object_data.valid == False or\
+        np.isnan(object_data.pose.orientation.x) or\
+        np.isnan(object_data.pose.orientation.y) or\
+        np.isnan(object_data.pose.orientation.z) or\
+        np.isnan(object_data.pose.orientation.w) or\
+        np.isnan(object_data.pose.position.x) or\
+        np.isnan(object_data.pose.position.y) or\
+        np.isnan(object_data.pose.position.z) or\
+        (object_data.pose.position.x == 0.) or\
+        (object_data.pose.position.y == 0.) or\
+        (object_data.dimensions.x <= 0.) or\
+        (object_data.dimensions.y <= 0.) or\
+        (object_data.dimensions.z <= 0.):
+            return False
+        else:
+            return True
     
-    # 方案三，创建一个map，map的坐标系采用的是以车右边方向为x，以前进为y，parking位置位于右边，resolution设为1米
+    def get_gem_pose(self):
+
+        rospy.wait_for_service("/gazebo/get_model_state")
+
+        try:
+            service_response = rospy.ServiceProxy(
+                "/gazebo/get_model_state", GetModelState
+            )
+            model_state = service_response(model_name="gem")
+        except rospy.ServiceException as exc:
+            rospy.loginfo("Service did not process request: " + str(exc))
+
+        x = model_state.pose.position.x
+        y = model_state.pose.position.y
+
+        orientation_q = model_state.pose.orientation
+        orientation_list = [
+            orientation_q.x,
+            orientation_q.y,
+            orientation_q.z,
+            orientation_q.w,
+        ]
+        (roll, pitch, yaw) = euler_from_quaternion(orientation_list)
+
+        return round(x, 4), round(y, 4), round(yaw, 4)
+    
+    # 方案一创建一个map，包含了车辆所有方向的map，但里面需要做很多的变换，比较复杂
+    # 弃用了
+    def callback(self, objects_data):
+        
+        height = 200
+        width = 200
+        factor = 4      # 4个grid=1m
+
+        # initial map data
+        map_data = OccupancyGrid()
+        map_data.header.frame_id = "map"
+        # 设定map的尺寸，尺寸适合能够优化计算，目前初始估计为200x200的栅格，每栅格0.25m
+        map_data.info.height = height
+        map_data.info.width = width
+        map_data.info.resolution = 0.25     # The map resolution [m/cell] 一个cell里边长为多少米，越小规划地越好
+        map_data.info.origin.position.x = height/2/factor
+        map_data.info.origin.position.y = width/2/factor
+        map_data.info.origin.position.z = 0
+        map_data.info.origin.orientation.x = 0
+        map_data.info.origin.orientation.y = 0
+        map_data.info.origin.orientation.z = 1
+        map_data.info.origin.orientation.w = 0
+
+        # 初始化map内容全为0，用一个二维数组来表达
+        map = np.zeros((width, height))
+
+        # 储存投影在map上的四个点
+        objects_list = list()
+        for object in objects_data.objects:
+            if(self.IsObjectValid(object)):
+                # object的中心位置
+                object_x = object.pose.position.x
+                object_y = object.pose.position.y
+                object_x_size = object.dimensions.x
+                object_y_size = object.dimensions.y
+
+                objects_list.append([object_x,object_y])
+
+                if object_x >=0 and object_y >=0:
+                    col = round(height/2)-factor*round(object_x)
+                    row = round(width/2) - factor*round(object_y)
+                    
+                elif object_x>0 and object_y<0:
+                    col = round(height/2)-factor*round(object_x)
+                    row = round(factor*abs(object_y))+round(width/2)
+                elif object_x<0 and object_y>0:
+                    col = factor*round(abs(object_x))+round(height/2)
+                    row = round(width/2) - factor*round(object_y)
+                elif object_x<0 and object_y<0:
+                    col = factor*round(abs(object_x))+round(height/2)
+                    row = factor*round(abs(object_y))+round(width/2)
+                
+                low_row = row-round(factor*object_x_size/2) 
+                high_row = row+round(factor*object_x_size/2)
+                low_col = col-round(factor*object_y_size/2)
+                high_col = col+round(factor*object_y_size/2)
+
+                if max(high_col,high_row)>height or max(low_col,low_row)<0:
+                    print("object的尺寸超出了栅格化地图的边界了")
+                    return
+
+                map[low_row:high_row,low_col:high_col] = 100
+
+        convert_data = np.reshape(map.astype(int), (1, height*width))
+        map_data.data = convert_data[0]
+        self.pub_map.publish(map_data)
+
+        self.pubGoalPose(objects_list)
+        # self.pubStartPose()
+
+    # 方案二，创建一个map，map的坐标系采用的是以车右边方向为x，以前进为y，parking位置位于右边
+    def callback2(self, objects_data):
+        height = 200
+        width = 200
+        factor = 4      # 4个grid=1m
+
+        # initial map data
+        map_data = OccupancyGrid()
+        map_data.header.frame_id = "map"
+        # 设定map的尺寸，尺寸适合能够优化计算，目前初始估计为200x200的栅格，每栅格0.25m
+        map_data.info.height = height
+        map_data.info.width = width
+        map_data.info.resolution = 0.25     # The map resolution [m/cell] 一个cell里边长为多少米，越小规划地越好
+        map_data.info.origin.position.x = -width/2/factor
+        map_data.info.origin.position.y = -height/2/factor
+        map_data.info.origin.position.z = 0
+        map_data.info.origin.orientation.x = 0
+        map_data.info.origin.orientation.y = 0
+        map_data.info.origin.orientation.z = 0
+        map_data.info.origin.orientation.w = 1
+
+        # 初始化map内容全为0，用一个二维数组来表达
+        map = np.zeros((width, height))
+
+        # 储存投影在map上的四个点
+        objects_list = list()
+        for object in objects_data.objects:
+            if(self.IsObjectValid(object)):
+                # object的中心位置
+                object_x = object.pose.position.x
+                object_y = object.pose.position.y
+                object_x_size = object.dimensions.x
+                object_y_size = object.dimensions.y
+
+                objects_list.append([object_x,object_y])
+
+                # 在robot frame下所检测到的目标位置变换到map坐标系中
+                rob_object_pose = PointStamped()
+                rob_object_pose.header.frame_id = "/base_footprint"
+                rob_object_pose.header.stamp =rospy.Time(0)
+                rob_object_pose.point.x = object_x
+                rob_object_pose.point.y = object_y
+                rob_object_pose.point.z = 0
+
+                # 将车辆坐标系所检测到的物体的坐标转换到map frame下
+                map_object_pos = self.transform_to_map_frame(init_pose=rob_object_pose,target_frame='map',inital_frame='base_footprint')
+                map_object_pos_x = map_object_pos.point.x
+                map_object_pos_y = map_object_pos.point.y
+
+                col = round(width/2) + factor*round(map_object_pos_x)
+                row = round(height/2) + factor*round(map_object_pos_y)
+
+                low_row = row-round(factor*object_y_size/2) 
+                high_row = row+round(factor*object_y_size/2)
+                low_col = col-round(factor*object_x_size/2)
+                high_col = col+round(factor*object_x_size/2)
+
+                if max(high_col,high_row)>height or max(low_col,low_row)<0:
+                    print("object的尺寸超出了栅格化地图的边界了")
+                    return
+
+                map[int(low_row):int(high_row),int(low_col):int(high_col)] = 100
+
+        convert_data = np.reshape(map.astype(int), (1, height*width))
+        map_data.data = convert_data[0]
+        self.pub_map.publish(map_data)
+
+        self.pubGoalPose(objects_list)
+        self.pubStartPose()
+    
+        # 方案三，创建一个map，map的坐标系采用的是以车右边方向为x，以前进为y，parking位置位于右边，resolution设为1米
     def callback3(self, objects_data):
         if self.replan == False:
             return
@@ -64,56 +247,78 @@ class map_Builder():
         # 初始化map内容全为0，用一个二维数组来表达
         map = np.zeros((width, height))
 
+        # 储存投影在map上的四个点
+        objects_list = list()
         for object in objects_data.objects:
-            if object.type != "stop sign":
-                continue
-            object_x = object.point.x
-            object_y = object.point.y
+            if(self.IsObjectValid(object)):
+                # object的中心位置
+                object_x = object.pose.position.x
+                object_y = object.pose.position.y
+                object_x_size = object.dimensions.x
+                object_y_size = object.dimensions.y
 
-            # 在robot frame下所检测到的目标位置变换到map坐标系中
-            rob_object_pose = PointStamped()
-            rob_object_pose.header.frame_id = "/base_footprint"
-            rob_object_pose.header.stamp =rospy.Time(0)
-            rob_object_pose.point.x = object_x
-            rob_object_pose.point.y = object_y
-            rob_object_pose.point.z = 0
+                objects_list.append([object_x,object_y])
 
-            # 将车辆坐标系所检测到的物体的坐标转换到map frame下
-            map_object_pos = self.transform_to_map_frame(init_pose=rob_object_pose,target_frame='map',inital_frame='base_footprint')
-            map_object_pos_x = map_object_pos.point.x
-            map_object_pos_y = map_object_pos.point.y
+                # 在robot frame下所检测到的目标位置变换到map坐标系中
+                rob_object_pose = PointStamped()
+                rob_object_pose.header.frame_id = "/base_footprint"
+                rob_object_pose.header.stamp =rospy.Time(0)
+                rob_object_pose.point.x = object_x
+                rob_object_pose.point.y = object_y
+                rob_object_pose.point.z = 0
 
-            col = round(width/2) + factor*round(map_object_pos_x)
-            row = round(height/2) + factor*round(map_object_pos_y)
+                # 将车辆坐标系所检测到的物体的坐标转换到map frame下
+                map_object_pos = self.transform_to_map_frame(init_pose=rob_object_pose,target_frame='map',inital_frame='base_footprint')
+                map_object_pos_x = map_object_pos.point.x
+                map_object_pos_y = map_object_pos.point.y
 
-            if col>height or row>width:
-                print("object的尺寸超出了栅格化地图的边界了")
-                map = np.zeros((width, height))
-                # return
-            else:
-                map[row][col] = 100
+                col = round(width/2) + factor*round(map_object_pos_x)
+                row = round(height/2) + factor*round(map_object_pos_y)
+
+                low_row = row-round(factor*object_y_size/2) 
+                high_row = row+round(factor*object_y_size/2)
+                low_col = col-round(factor*object_x_size/2)
+                high_col = col+round(factor*object_x_size/2)
+
+                if max(high_col,high_row)>height or max(low_col,low_row)>width:
+                    print("object的尺寸超出了栅格化地图的边界了")
+                    map = np.zeros((width, height))
+                    # return
+                else:
+                    map[int(low_row):int(high_row),int(low_col):int(high_col)] = 100
 
         convert_data = np.reshape(map.astype(int), (1, height*width))
         map_data.data = convert_data[0]
         self.pub_map.publish(map_data)
 
-        self.pubGoalPose(map_object_pos_x, map_object_pos_y)
+        self.pubGoalPose(objects_list)
         self.pubStartPose()
     
-    def pubGoalPose(self,map_object_pos_x,map_object_pos_y):
-        goal_x = map_object_pos_x
-        goal_y = map_object_pos_y-0.5     # stop sign 前0.5米
+    def pubGoalPose(self,objects_list):
+        if len(objects_list) == 2:
+            goal_x = (objects_list[0][0]+objects_list[1][0])/2
+            goal_y = (objects_list[0][1]+objects_list[1][1])/2
+            # print("goal_x:",goal_x,"goal_y:",goal_y)
+            base_goal_pose = PointStamped()
+            base_goal_pose.header.frame_id = "/base_footprint"
+            base_goal_pose.header.stamp = rospy.Time(0)
+            base_goal_pose.point.x = goal_x
+            base_goal_pose.point.y = goal_y
+            base_goal_pose.point.z = 0
 
-        goal_data = PoseStamped()
-        goal_data.pose.position.x = goal_x
-        goal_data.pose.position.y = goal_y
-        goal_data.pose.position.z = 0
-        goal_data.pose.orientation.x = 0
-        goal_data.pose.orientation.y = 0
-        goal_data.pose.orientation.z = 0.706825181105366
-        goal_data.pose.orientation.w = 0.7073882691671998
+            # 将处于base_footprint坐标系的goal位置变换到map坐标系中
+            map_goal_pos = self.transform_to_map_frame(init_pose=base_goal_pose,target_frame='map',inital_frame='base_footprint')
 
-        self.pub_goal.publish(goal_data)
+            goal_data = PoseStamped()
+            goal_data.pose.position.x = map_goal_pos.point.x 
+            goal_data.pose.position.y = map_goal_pos.point.y 
+            goal_data.pose.position.z = 0
+            goal_data.pose.orientation.x = 0
+            goal_data.pose.orientation.y = 0
+            goal_data.pose.orientation.z = 0.706825181105366
+            goal_data.pose.orientation.w = 0.7073882691671998
+
+            self.pub_goal.publish(goal_data)
     
     # Publish the start pose
     def pubStartPose(self):
@@ -131,8 +336,8 @@ class map_Builder():
         map_rob_pos = self.transform_to_map_frame(init_pose=odom_rob_pose,target_frame='map',inital_frame='odom')
 
         init_data = PoseWithCovarianceStamped()
-        init_data.pose.pose.position.x = map_rob_pos.point.x
-        init_data.pose.pose.position.y = map_rob_pos.point.y
+        init_data.pose.pose.position.x = map_rob_pos.point.x - 0.3
+        init_data.pose.pose.position.y = map_rob_pos.point.y - 0.6
         init_data.pose.pose.position.z = 0
 
         init_data.pose.pose.orientation.x = 0

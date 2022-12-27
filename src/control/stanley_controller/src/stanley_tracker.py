@@ -148,7 +148,10 @@ class Stanley(object):
         # /sPath不包含转向,换一个
         path_topic = rospy.get_param("planning_path","/final_Path")
         # vehicle_pose_topic = rospy.get_param("vehicle_pose_topic","/sPathVehicle")
+        # 发布的里程计的话题
         odom_topic = rospy.get_param("odom","/odom")
+        # 激光雷达里程计
+        lidar_odom_topic = rospy.get_param("lidar_odom","/laser_odom_path")
         
         # 该位置是相对于map坐标系的
         self.vehicle_x = 0.0
@@ -188,13 +191,43 @@ class Stanley(object):
         # 订阅odometry的消息，包含了车辆相对世界坐标系的内容
         # rospy.Subscriber(odom_topic, Odometry, self.odom_callback)
 
-
+        # 订阅激光雷达里程计
+        rospy.Subscriber(lidar_odom_topic, Path, self.get_gem_odom,queue_size=1)
 
         # 车辆控制的发布
         self.ackermann_pub = rospy.Publisher(
             "/ackermann_cmd", AckermannDrive, queue_size=1
         )
     
+    # 通过激光雷达里程计获取gem的位置
+    def get_gem_odom(self, lidar_odom_msg):
+        # 读取最新的位置
+
+        cur_pose = lidar_odom_msg.poses[-1]
+
+        cur_pose.header.stamp = rospy.Time(0)
+
+        # 将lidar odometry坐标系的车辆坐标转换到map frame下
+        map_vehicle_pos = self.transform_to_map_frame(init_pose=cur_pose,target_frame='map',inital_frame='/init_position')
+
+        self.vehicle_x = map_vehicle_pos.pose.position.x
+        self.vehicle_y = map_vehicle_pos.pose.position.y
+
+        # 四元素转欧拉角
+        orientation_q = map_vehicle_pos.pose.orientation
+        orientation_list = [
+            orientation_q.x,
+            orientation_q.y,
+            orientation_q.z,
+            orientation_q.w,
+        ]
+        (roll, pitch, yaw) = euler_from_quaternion(orientation_list)
+        self.vehicle_heading = yaw
+
+        self.speed = 0.3
+
+        # self.vehicle_x, self.vehicle_y, self.vehicle_heading
+
     # 请求服务获取gem的位置
     def get_gem_pose(self):
         rospy.wait_for_service("/gazebo/get_model_state")
@@ -320,7 +353,6 @@ class Stanley(object):
         return idx
     
     # Conversion to -pi to pi
-    # 这样将不允许倒车
     def pi_2_pi(self, angle):
 
         if angle > np.pi:
@@ -382,8 +414,9 @@ class Stanley(object):
             if len(self.path_points_x)==0 or len(self.path_points_y) == 0 or len(self.path_points_heading) == 0:
                 self.rate.sleep()
                 continue
-
-            self.vehicle_x, self.vehicle_y, self.vehicle_heading = self.get_gem_pose()
+            
+            # 请求服务读取gem的位置
+            # self.vehicle_x, self.vehicle_y, self.vehicle_heading = self.get_gem_pose()
 
             self.path_points_x = np.array(self.path_points_x)
             self.path_points_y = np.array(self.path_points_y)
@@ -415,7 +448,7 @@ class Stanley(object):
                 if abs(temp_angle) < np.pi / 2:
                     self.goal = idx
                     break
-            print("当前目标索引",self.goal,"总索引",len(self.path_points_x)-1)
+            
             if self.goal == -1:
                 continue
             else:
@@ -483,7 +516,7 @@ class Stanley(object):
                 self.rate.sleep()
                 continue
             
-            self.vehicle_x, self.vehicle_y, self.vehicle_heading = self.get_gem_pose()
+            # self.vehicle_x, self.vehicle_y, self.vehicle_heading = self.get_gem_pose()
 
             self.path_points_x = np.array(self.path_points_x)
             self.path_points_y = np.array(self.path_points_y)

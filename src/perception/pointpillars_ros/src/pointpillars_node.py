@@ -18,6 +18,7 @@ import numpy as np
 import math
 import ros_numpy
 import torch
+from sensor_msgs import point_cloud2
 
 # 将PointPillars的环境导入进来
 path_model = "/home/chris/PointPillars"
@@ -68,25 +69,56 @@ class pointPillars_detector():
         # self.sub_left_gray_image = rospy.Subscriber('/kitti/cam_gray_left', Image, self.img_callback, queue_size=1)
         # self.sub_right_gray_image = rospy.Subscriber('/kitti/cam_gray_right', Image, self.img_callback, queue_size=1)
 
-        # self.sub_point_cloud = rospy.Subscriber('/points_raw',PointCloud2, self.pointcloud_callback,queue_size=1)
+        self.sub_point_cloud = rospy.Subscriber('/lidar1/velodyne_points',PointCloud2, self.pointcloud_callback,queue_size=1)
         
         # 方案二：同步订阅
         # 左边彩色就够了
-        self.sub_left_color_image = message_filters.Subscriber('/front_single_camera/image_raw', Image)#订阅第一个话题，左边摄像头彩色图像
+        # self.sub_left_color_image = message_filters.Subscriber('/front_single_camera/image_raw', Image)# 仿真的图像
+        # self.sub_left_color_image = message_filters.Subscriber('/zed2/zed_node/rgb/image_rect_color', Image)# gem的图像
+
         # self.sub_left_gray_image = message_filters.Subscriber('/kitti/cam_gray_left', Image)#订阅第二个话题，左边摄像头灰色图像
         # self.sub_right_color_image = message_filters.Subscriber('/kitti/cam_color_right', Image)#订阅第三个话题，右边摄像头彩色图像
         # self.sub_right_gray_image = message_filters.Subscriber('/kitti/cam_gray_right', Image)#订阅第四个话题，右边摄像头灰色图像
 
-        self.sub_point_cloud = message_filters.Subscriber('/velodyne_points',PointCloud2)    # 订阅第五个话题，点云数据
-        # self.sub_point_cloud = message_filters.Subscriber('/lidar1/velodyne_points',PointCloud2)    # 订阅第五个话题，ROSBAG
+        # self.sub_point_cloud = message_filters.Subscriber('/velodyne_points',PointCloud2)    # 仿真的的点云数据
+        # self.sub_point_cloud = message_filters.Subscriber('/lidar1/velodyne_points',PointCloud2)    # gem上面的点云数据
 
         self.pub_objects = rospy.Publisher('/detection/lidar_detector/objects', DetectedObjectArray, queue_size=1)
 
         # # 1 is the size of queue and 1 is the time in sec to consider for aprox:
-        sync = message_filters.ApproximateTimeSynchronizer([self.sub_left_color_image, self.sub_point_cloud], 1,1)  
-        sync.registerCallback(self.multi_callback)
-        
+        # sync = message_filters.ApproximateTimeSynchronizer([self.sub_left_color_image, self.sub_point_cloud], 1,1)  
+        # sync.registerCallback(self.multi_callback)
+    
+    # 仅接收点云的回调函数
+    def pointcloud_callback(self, lidar_data):
+        # Convert PointCloud2 data to numpy
+        # pc = ros_numpy.point_cloud2.pointcloud2_to_xyz_array(lidar_data).astype(np.float32)
+        pc = ros_numpy.point_cloud2.pointcloud2_to_array(lidar_data)
+        pc = np.asarray(pc.tolist()).astype(np.float32)[:,:4]
+        pc[:,3] = 0
+        pc = self.point_range_filter(pc)
+        pc_torch = torch.from_numpy(pc)
 
+        self.model.eval()
+        with torch.no_grad():
+            if not args.no_cuda:
+                pc_torch = pc_torch.cuda()
+            # print("来自于")
+            result_filter = self.model(batched_pts=[pc_torch], 
+                                mode='test')[0]
+        if 'lidar_bboxes' not in result_filter or 'labels' not in result_filter or 'scores' not in result_filter:
+            return
+        result_filter = keep_bbox_from_lidar_range(result_filter, self.pcd_limit_range)
+        # print(len(result_filter))
+        if result_filter is None:
+            print("Nothing was detected")
+            return
+        lidar_bboxes = result_filter['lidar_bboxes']
+        labels, scores = result_filter['labels'], result_filter['scores']
+
+        self.pubDetectedObject(lidar_bboxes,labels, lidar_data.header)
+
+    # 同步订阅的回调函数
     def multi_callback(self, cam_data, lidar_data):
         try:
             # Convert a ROS image message into an OpenCV image
@@ -103,7 +135,8 @@ class pointPillars_detector():
         # print(lidar_data)
         pc = ros_numpy.point_cloud2.pointcloud2_to_array(lidar_data)
         pc = np.asarray(pc.tolist()).astype(np.float32)[:,:4]
-        # pc = self.point_range_filter(pc)
+        pc[:,3] = 0
+        pc = self.point_range_filter(pc)
         pc_torch = torch.from_numpy(pc)
 
         self.model.eval()
@@ -122,10 +155,14 @@ class pointPillars_detector():
 
             image_shape = raw_img.shape[:2]
             result_filter = keep_bbox_from_image_range(result_filter, tr_velo_to_cam, r0_rect, P2, image_shape)
+            
+        if 'lidar_bboxes' not in result_filter or 'labels' not in result_filter or 'scores' not in result_filter:
+            return
 
         result_filter = keep_bbox_from_lidar_range(result_filter, self.pcd_limit_range)
         # print(len(result_filter))
         if result_filter is None:
+            print("Nothing was detected")
             return
         lidar_bboxes = result_filter['lidar_bboxes']
         labels, scores = result_filter['labels'], result_filter['scores']
@@ -133,7 +170,7 @@ class pointPillars_detector():
         self.pubDetectedObject(lidar_bboxes,labels, lidar_data.header)
 
     # 根据雷达的范围再过滤一次点云
-    def point_range_filter(self, pts, point_range=[0, -39.68, -3, 69.12, 39.68, 1]):
+    def point_range_filter(self, pts, point_range=[0, -10, -3, 20, 3, 0]):
         '''
         data_dict: dict(pts, gt_bboxes_3d, gt_labels, gt_names, difficulty)
         point_range: [x1, y1, z1, x2, y2, z2]

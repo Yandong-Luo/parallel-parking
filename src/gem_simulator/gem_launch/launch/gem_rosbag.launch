@@ -1,16 +1,58 @@
 <?xml version="1.0"?>
-
 <launch>
-    <!--Visualize the objects detected by PointPillar-->
-    <node pkg="detected_objects_visualizer" type="visualize_detected_objects" name="point_pillars_visualization_01"
-        output="screen"  ns="/detection/lidar_detector"/>
-
-    <!-- 为了配合代码里的坐标变换加入的坐标关系，真实用的时候删掉 -->
-    <node pkg="tf" type="static_transform_publisher" name="map_to_path_transformation" args="0 0 0 0 0 0 1 base_footprint front_single_camera_link 100" />
+    <arg name="braking"                         default="false"/>
+    <arg name="track"                           default="false"/>
+    <arg name="3d_detector"                     default="false"/>
+    <arg name="stop_sign"                       default="false"/>
     
-    <node pkg="rgb_depth" type="rgb_depth_calculator.py" name="rgb_depth_calculator" output="screen"/>
+    
+            
+    <!-- ======================================= Braking TASK ==============================================-->
+    <group if="$(arg braking)">
+        <!-- 弃用YOLO -->
+        <!-- <include file="$(find darknet_ros)/launch/yolo_v4_rds.launch"/> -->
 
-    <include file="$(find darknet_ros)/launch/yolo_v4_rds.launch"/>
+        <!-- Using cascade to detect person and stop sign, and calcualte the position based on depth image -->
+        <include file="$(find hog_haar_person_detection)/launch/hog_haar_person_detection.launch">
+            <arg name="detect_type" value="person"/>        <!-- The value of this parameter determine the type of detector (stop sign or person)-->
+        </include>
+
+        <node pkg="stanley_controller" type="braking.py"    name="braking_node" output="screen"/>
+
+        <!-- 为了配合代码里的坐标变换加入的坐标关系，真实用的时候删掉 -->
+        <node pkg="tf" type="static_transform_publisher" name="map_to_path_transformation" args="0 0 0 0 0 0 1 base_footprint front_single_camera_link 100" />
+    </group>
+
+    <!-- ======================================= Stop sign TASK ==============================================-->
+    <group if="$(arg stop_sign)">
+        <!-- 弃用YOLO -->
+        <!-- <include file="$(find darknet_ros)/launch/yolo_v4_rds.launch"/> -->
+
+        <!-- Using cascade to detect person and stop sign, and calcualte the position based on depth image -->
+        <!-- The value of "detect_type" parameter determine the type of detector (stop sign or person)-->
+        <include file="$(find hog_haar_person_detection)/launch/hog_haar_person_detection.launch">
+            <arg name="detect_type" value="stop sign"/>
+        </include>
+        <node pkg="stanley_controller" type="braking.py"    name="braking_node" output="screen"/>
+        <!-- 为了配合代码里的坐标变换加入的坐标关系，真实用的时候删掉 -->
+        <node pkg="tf" type="static_transform_publisher" name="map_to_path_transformation" args="0 0 0 0 0 0 1 base_footprint front_single_camera_link 100" />
+    </group>
+
+    <!-- ======================================= Tracking Lane Line TASK ==============================================-->
+    <group if="$(arg track)">
+        <!-- Detect lane line-->
+        <node pkg="lane_line_detector" type="studentVision.py" name="lane_line_detector" output="screen"/>
+    </group>
+
+    <!-- ======================================= Point Cloud detector TASK ==============================================-->
+    <group if="$(arg 3d_detector)">
+        <!--Visualize the objects detected by PointPillar-->
+        <!-- <node pkg="detected_objects_visualizer" type="visualize_detected_objects" name="point_pillars_visualization_01"
+                output="screen"  ns="/detection/lidar_detector"/> -->
+    </group>
+
+    <node pkg="detected_objects_visualizer" type="visualize_detected_objects" name="point_pillars_visualization_01"
+                output="screen"  ns="/detection/lidar_detector"/>
 
     <!-- RViz -->
     <node name="rviz" pkg="rviz" type="rviz" args="-d $(find gem_launch)/config_rviz/gem_rosbag.rviz" />

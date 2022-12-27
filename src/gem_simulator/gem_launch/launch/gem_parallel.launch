@@ -9,8 +9,8 @@
     <arg name="gui" default="true"/>
     <arg name="headless" default="false"/>
     <arg name="debug" default="false"/>
-    <arg name="world_name" default="highbay_track.world"/> 
-    <!-- <arg name="world_name" default="highbay_parking.world"/>  -->
+    <!-- <arg name="world_name" default="highbay_track.world"/>  -->
+    <arg name="world_name" default="highbay_parking.world"/> 
     <!-- <arg name="world_name" default="highbay_braking.world"/> -->
     <!-- <arg name="world_name" default="highbay_track_with_pedestrian.world"/>  -->
     <arg name="vehicle_x" default="-10"/>
@@ -110,7 +110,7 @@
     <include file="$(find aloam_velodyne)/launch/aloam_velodyne_VLP_16.launch"/>
     
     <!-- 用于planning的搜索空间 -->
-    <node pkg="manual_map_builder" type="mapbuilder_stopsign.py" name="planning_space" output="screen"/>
+    <node pkg="manual_map_builder" type="mapbuilder_node.py" name="planning_space" output="screen"/>
     
     <!-- hybrid planning规划路径 -->
     <node pkg="hybrid_astar" type="hybrid_astar" name="hybrid_planner" output="screen"/>

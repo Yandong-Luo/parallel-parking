@@ -131,8 +131,6 @@ def line_fit(binary_warped):
 	try:
 		left_fit = np.polyfit(left_poly_y, left_poly_x, 2)
 		right_fit = np.polyfit(right_poly_y, right_poly_x, 2)
-
-		# left_curverad, right_curverad = cal_radius(left_poly_y, left_poly_x, right_poly_y, right_poly_x)
 	####
 	except TypeError:
 		print("Unable to detect lanes")
@@ -147,51 +145,9 @@ def line_fit(binary_warped):
 	ret['out_img'] = out_img
 	ret['left_lane_inds'] = left_lane_inds
 	ret['right_lane_inds'] = right_lane_inds
-	# ret['left_curverad'] = left_curverad
-	# ret['right_curverad'] = right_curverad
 
 	return ret
 
-def cal_radius(imgH, imgW, left_fit, right_fit):
-	# 图像中像素个数与实际中距离的比率
-	# 沿车行进的方向长度大概覆盖了30米，按照美国高速公路的标准，宽度为3.7米（经验值）
-	ym_per_pix = 30 / imgH  # y方向像素个数与距离的比例
-	xm_per_pix = 100 / imgW  # x方向像素个数与距离的比例		需要修改这个3.7
-
-	ploty=np.linspace(0, imgH-1, num=imgH)
-	y_eval = np.max(ploty)
-	leftx = left_fit[0]*ploty**2+left_fit[1]*ploty+left_fit[2]
-	rightx = right_fit[0]*ploty**2+right_fit[1]*ploty+right_fit[2]
-
-	left_fit_cr = np.polyfit(ploty*ym_per_pix, leftx*xm_per_pix, 2)
-	right_fit_cr = np.polyfit(ploty*ym_per_pix, rightx*xm_per_pix, 2)
-
-	left_curverad = ((1 + (2*left_fit_cr[0]*y_eval*ym_per_pix + left_fit_cr[1])**2)**1.5) / np.absolute(2*left_fit_cr[0])
-	right_curverad = ((1 + (2*right_fit_cr[0]*y_eval*ym_per_pix + right_fit_cr[1])**2)**1.5) / np.absolute(2*right_fit_cr[0])
-	xoffset = (left_fit_cr[2]+right_fit_cr[2])/2-imgW*xm_per_pix/2
-
-	return left_curverad, right_curverad, xoffset
-
-
-# # 1. 定义函数计算图像的中心点位置
-# def cal_line__center(img):
-#     undistort_img = img_undistort(img, mtx, dist)
-#     rigin_pipline_img = pipeline(undistort_img)
-#     transform_img = img_perspect_transform(rigin_pipline_img, M)
-#     left_fit, right_fit = cal_line_param(transform_img)
-#     y_max = img.shape[0]
-#     left_x = left_fit[0] * y_max ** 2 + left_fit[1] * y_max + left_fit[2]
-#     right_x = right_fit[0] * y_max ** 2 + right_fit[1] * y_max + right_fit[2]
-
-# def cal_center_departure(img, left_fit, right_fit):
- 
-#     # 计算中心点
-#     y_max = img.shape[0]
-#     left_x = left_fit[0] * y_max ** 2 + left_fit[1] * y_max + left_fit[2]
-#     right_x = right_fit[0] * y_max ** 2 + right_fit[1] * y_max + right_fit[2]
-#     xm_per_pix = 3.7 / 700
-
-# 	center_depart = ((left_x + right_x) / 2 - lane_center) * xm_per_pix
 
 def tune_fit(binary_warped, left_fit, right_fit):
 	"""
@@ -377,8 +333,13 @@ def final_viz(state, undist, depth, left_fit, right_fit, m_inv):
 			pts_right.append(i)
 	pts_left = np.array([pts_left])
 	pts_right = np.array([pts_right])
-
-	pts = np.hstack((pts_left, pts_right))
+	# if len(pts_left) >0  and len(pts_right)>0:
+	# 	pts = np.hstack((pts_left, pts_right))
+	# elif len(pts_left) >0 and len(pts_right) == 0:
+	# 	pts = pts_left
+	# else:
+	# 	pts = pts_right
+	
 
 	# Draw the lane onto the warped blank image
 	# 1280, 720
